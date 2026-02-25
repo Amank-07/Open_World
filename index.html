@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Real-Time Location Map (React)</title>
+
+    <!-- Leaflet styles -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+
+    <!-- App styles -->
+    <link rel="stylesheet" href="style.css" />
+
+    <!-- React 18 (UMD) -->
+    <script
+      crossorigin
+      src="https://unpkg.com/react@18/umd/react.development.js"
+    ></script>
+    <script
+      crossorigin
+      src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"
+    ></script>
+
+    <!-- Babel for in-browser JSX transform -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Leaflet JS -->
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useEffect, useRef, useState } = React;
+
+      function App() {
+        const mapRef = useRef(null);
+        const markerRef = useRef(null);
+        const accuracyCircleRef = useRef(null);
+        const watchIdRef = useRef(null);
+
+        const [isTracking, setIsTracking] = useState(false);
+        const [follow, setFollow] = useState(true);
+        const [status, setStatus] = useState(
+          'Click "Start Tracking" to begin.'
+        );
+
+        useEffect(() => {
+          const map = L.map('map', {
+            zoomControl: true,
+            attributionControl: true,
+          }).setView([20, 0], 2);
+
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution:
+              '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+          }).addTo(map);
+
+          mapRef.current = map;
+
+          return () => {
+            if (watchIdRef.current != null && navigator.geolocation) {
+              navigator.geolocation.clearWatch(watchIdRef.current);
+            }
+            map.remove();
+          };
+        }, []);
+
+        const updatePositionOnMap = (lat, lng, accuracy) => {
+          const map = mapRef.current;
+          if (!map) return;
+
+          const latLng = [lat, lng];
+
+          if (!markerRef.current) {
+            markerRef.current = L.marker(latLng).addTo(map);
+          } else {
+            markerRef.current.setLatLng(latLng);
+          }
+
+          if (!accuracyCircleRef.current) {
+            accuracyCircleRef.current = L.circle(latLng, {
+              radius: accuracy || 20,
+              color: '#4f46e5',
+              fillColor: '#4f46e5',
+              fillOpacity: 0.15,
+            }).addTo(map);
+          } else {
+            accuracyCircleRef.current.setLatLng(latLng);
+            accuracyCircleRef.current.setRadius(accuracy || 20);
+          }
+
+          if (follow) {
+            const currentZoom = map.getZoom();
+            const desiredZoom = currentZoom < 15 ? 16 : currentZoom;
+            map.setView(latLng, desiredZoom, { animate: true });
+          }
+        };
+
+        const startTracking = () => {
+          if (!navigator.geolocation) {
+            setStatus('Geolocation is not supported on this device.');
+            return;
+          }
+
+          if (isTracking) return;
+
+          const startWatch = (options, label) => {
+            if (watchIdRef.current != null) {
+              navigator.geolocation.clearWatch(watchIdRef.current);
+              watchIdRef.current = null;
+            }
+
+            setStatus(
+              label ||
+                'Getting your location... If this takes long, check Windows Location settings and browser permission.'
+            );
+
+            const watchId = navigator.geolocation.watchPosition(
+              (pos) => {
+                const { latitude, longitude, accuracy } = pos.coords;
+                updatePositionOnMap(latitude, longitude, accuracy);
+                setIsTracking(true);
+                setStatus('Tracking your live location.');
+              },
+              (err) => {
+                // Auto-retry once on TIMEOUT by relaxing accuracy settings.
+                if (
+                  err.code === err.TIMEOUT &&
+                  options &&
+                  options.enableHighAccuracy === true
+                ) {
+                  startWatch(
+                    { ...options, enableHighAccuracy: false, timeout: 90000 },
+                    'Timed out. Retrying with lower accuracy (often works indoors/laptops)...'
+                  );
+                  return;
+                }
+
+                let message = 'Error getting location.';
+                if (err.code === err.PERMISSION_DENIED) {
+                  message =
+                    'Permission denied. Allow location access in your browser site settings.';
+                } else if (err.code === err.POSITION_UNAVAILABLE) {
+                  message =
+                    'Location unavailable. Turn on device Location, connect to Wi‑Fi, and try in an open area.';
+                } else if (err.code === err.TIMEOUT) {
+                  message =
+                    'Location request timed out. Try again, or move near a window / outside for GPS.';
+                }
+
+                setIsTracking(false);
+                setStatus(
+                  message +
+                    ' (Tip: On Windows: Settings → Privacy & security → Location → Location services ON.)'
+                );
+              },
+              options
+            );
+
+            watchIdRef.current = watchId;
+            setIsTracking(true);
+          };
+
+          startWatch({
+            enableHighAccuracy: true,
+            maximumAge: 0,
+            timeout: 60000,
+          });
+        };
+
+        const stopTracking = () => {
+          if (watchIdRef.current != null && navigator.geolocation) {
+            navigator.geolocation.clearWatch(watchIdRef.current);
+            watchIdRef.current = null;
+          }
+          setIsTracking(false);
+          setStatus('Tracking stopped. You can start again anytime.');
+        };
+
+        const handleFollowChange = (event) => {
+          setFollow(event.target.checked);
+        };
+
+        return (
+          <div className="app">
+            <header className="app-header">
+              <h1>Real-Time Location Map</h1>
+              <p>See yourself move on the map using your device&apos;s GPS.</p>
+            </header>
+
+            <main className="app-main">
+              <section className="map-container">
+                <div id="map"></div>
+              </section>
+
+              <section className="controls">
+                <div className="buttons">
+                  <button
+                    onClick={startTracking}
+                    className="btn primary"
+                    disabled={isTracking}
+                  >
+                    {isTracking ? 'Tracking...' : 'Start Tracking'}
+                  </button>
+                  <button
+                    onClick={stopTracking}
+                    className="btn secondary"
+                    disabled={!isTracking}
+                  >
+                    Stop Tracking
+                  </button>
+                </div>
+
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={follow}
+                    onChange={handleFollowChange}
+                  />
+                  <span>Keep map centered on me</span>
+                </label>
+
+                <div className="status">{status}</div>
+              </section>
+            </main>
+
+            <footer className="app-footer">
+              <span>
+                Built with React, browser Geolocation API &amp; OpenStreetMap via
+                Leaflet.
+              </span>
+            </footer>
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
+
